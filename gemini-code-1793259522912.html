@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <title>Prism Sound Tracker AR</title>
+  <!-- A-Frame & AR.js Libraries -->
+  <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
+  <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+  <style>
+    #ui-container {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      text-align: center;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 15px 25px;
+      border-radius: 15px;
+      color: #fff;
+      font-family: 'Tahoma', sans-serif;
+      width: 80%;
+      max-width: 400px;
+    }
+    .sound-bar-container {
+      width: 100%;
+      height: 10px;
+      background: #444;
+      border-radius: 5px;
+      margin-top: 10px;
+      overflow: hidden;
+    }
+    #sound-bar {
+      width: 0%;
+      height: 100%;
+      background: #00ff88;
+      transition: width 0.1s ease;
+    }
+    #status-text {
+      font-size: 16px;
+      font-weight: bold;
+      color: #ffd700;
+    }
+  </style>
+</head>
+<body style="margin: 0; overflow: hidden;">
+
+  <!-- UI Overlay -->
+  <div id="ui-container">
+    <div id="question-number">ข้อที่ 1 / 10</div>
+    <div id="status-text">พูดคำตอบของคุณผ่านไมโครโฟน...</div>
+    <div class="sound-bar-container">
+      <div id="sound-bar"></div>
+    </div>
+  </div>
+
+  <!-- AR Scene -->
+  <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false;">
+    <a-assets>
+      <!-- สามารถใส่ไฟล์โมเดล 3D (.gltf / .glb) ตรงนี้ได้ -->
+    </a-assets>
+
+    <!-- Marker ระบุตำแหน่งการวาง AR -->
+    <a-marker preset="hiro">
+      <!-- แสดงคำถาม/ช่องวางคำตอบ -->
+      <a-entity id="answer-slot" position="0 1.5 0" geometry="primitive: plane; width: 2.2; height: 0.6" material="color: #222; opacity: 0.8">
+        <a-text id="slot-text" value="[ พูดคำตอบ ]" align="center" color="#00ffff" width="4"></a-text>
+      </a-entity>
+
+      <!-- ตัวแทนโมเดลปริซึม 3D (ตัวอย่าง: ปริซึมสามเหลี่ยม) -->
+      <a-entity id="prism-model" position="0 0.5 0" animation="property: rotation; to: 0 360 0; loop: true; dur: 8000; easing: linear">
+        <a-cylinder segments-radial="3" radius="0.8" height="1.2" material="color: #ff007f; wireframe: false; opacity: 0.85"></a-cylinder>
+      </a-entity>
+    </a-marker>
+
+    <!-- กล้อง และ Cursor แสดงผลการตรวจจับเสียง -->
+    <a-entity camera>
+      <!-- Audio Cursor ลอยตามระดับเสียงพูด -->
+      <a-sphere id="audio-cursor" position="0 -0.5 -1.5" radius="0.05" material="color: #00ff88; shader: flat" visible="false"></a-sphere>
+    </a-entity>
+  </a-scene>
+
+  <script>
+    // -------------------------------------------------------------
+    // 1. ระบบตรวจจับระดับเสียง (Audio Tracking & Sound Meter)
+    // -------------------------------------------------------------
+    let audioContext, analyser, microphone, dataArray;
+    const soundBar = document.getElementById('sound-bar');
+    const audioCursor = document.getElementById('audio-cursor');
+
+    async function initAudioTracking() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioContext.createAnalyser();
+        microphone = audioContext.createMediaStreamSource(stream);
+        microphone.connect(analyser);
+        analyser.fftSize = 64;
+        dataArray = new Uint8Array(analyser.frequencyBinCount);
+        updateSoundMeter();
+      } catch (err) {
+        console.error('ไม่สามารถเข้าถึงไมโครโฟนได้:', err);
+      }
+    }
+
+    function updateSoundMeter() {
+      requestAnimationFrame(updateSoundMeter);
+      if (!analyser) return;
+
+      analyser.getByteFrequencyData(dataArray);
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        sum += dataArray[i];
+      }
+      let average = sum / dataArray.length;
+      let volume = Math.min(100, Math.max(0, average * 1.5));
+
+      // ปรับขนาด Sound Bar
+      soundBar.style.width = volume + '%';
+
+      // ปรับตำแหน่ง Audio Cursor ตามระดับความดังเสียง
+      if (volume > 15) {
+        audioCursor.setAttribute('visible', 'true');
+        let scale = 0.05 + (volume / 200);
+        audioCursor.setAttribute('scale', `${scale} ${scale} ${scale}`);
+      } else {
+        audioCursor.setAttribute('visible', 'false');
+      }
+    }
+
+    // -------------------------------------------------------------
+    // 2. ระบบแปลงเสียงเป็นข้อความ (Speech Recognition)
+    // -------------------------------------------------------------
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'th-TH';
+      recognition.continuous = true;
+      recognition.interimResults = false;
+
+      recognition.onresult = function(event) {
+        const lastIndex = event.results.length - 1;
+        const spokenText = event.results[lastIndex][0].transcript.trim();
+        console.log('เสียงที่ได้ยิน:', spokenText);
+        
+        // ส่งข้อความไปยังช่องคำตอบ
+        animateTextToSlot(spokenText);
+      };
+
+      recognition.start();
+    } else {
+      document.getElementById('status-text').innerText = 'เบราว์เซอร์ไม่รองรับ Speech Recognition';
+    }
+
+    // -------------------------------------------------------------
+    // 3. เอฟเฟกต์การนำข้อความเสียงไปวางในช่องคำตอบ
+    // -------------------------------------------------------------
+    function animateTextToSlot(text) {
+      const slotText = document.getElementById('slot-text');
+      const statusText = document.getElementById('status-text');
+
+      statusText.innerText = `ได้ยินเสียง: "${text}"`;
+      slotText.setAttribute('value', text);
+      slotText.setAttribute('color', '#ffff00');
+
+      // ตรวจสอบความถูกต้อง (ตัวอย่างข้อที่ 1)
+      setTimeout(() => {
+        if (text.includes('สามเหลี่ยม')) {
+          slotText.setAttribute('color', '#00ff00');
+          statusText.innerText = 'ถูกต้อง! 🎉';
+        } else {
+          slotText.setAttribute('color', '#ff3333');
+          statusText.innerText = 'ยังไม่ถูกต้อง ลองใหม่อีกครั้ง!';
+        }
+      }, 800);
+    }
+
+    // เริ่มการทำงานระบบเสียงเมื่อโหลดหน้าเว็บ
+    window.addEventListener('load', initAudioTracking);
+  </script>
+</body>
+</html>
